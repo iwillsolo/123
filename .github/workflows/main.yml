@@ -1,9 +1,5 @@
 name: Build rtdump-il2cpp-ps5
 
-# ─── Triggers ─────────────────────────────────────────────────────────────────
-#  Push / PR  → build and upload artifact
-#  Tag v*     → build + create a GitHub Release with the ELF attached
-#  Manual     → workflow_dispatch
 on:
   push:
     branches: [main, master]
@@ -12,7 +8,6 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
-# ─── Global env ───────────────────────────────────────────────────────────────
 env:
   PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
 
@@ -22,91 +17,57 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # ── 1. Source code ────────────────────────────────────────────────────────
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      # ── 2. Install prebuilt PS5 payload SDK from pacbrew ──────────────────────
-      #
-      # The official way to get the SDK in CI is to download the prebuilt
-      # tarball from ps5-payload-dev/pacbrew-repo.  This is fast (~10 s) and
-      # gives us the clang toolchain, headers, CRT, and SCE stubs ready-to-use.
-      # No need to clone or build the SDK from source.
-      - name: Install prebuilt PS5 payload SDK
-        run: |
-          wget -q \
-            https://github.com/ps5-payload-dev/pacbrew-repo/releases/latest/download/ps5-payload-dev.tar.gz
-          sudo tar xf ps5-payload-dev.tar.gz -C /
-          echo "SDK installed. Contents of $PS5_PAYLOAD_SDK:"
-          ls "$PS5_PAYLOAD_SDK"
-
-      # ── 3. Host dependencies for libcxx ───────────────────────────────────────
-      #
-      # clang-18 + lld-18 are the host compilers used by libcxx.sh to build
-      # the LLVM C++ standard library targeting the PS5 FreeBSD environment.
-      # cmake + ninja are required by the LLVM build system.
-      - name: Install apt dependencies
+      - name: Install PS5 payload SDK
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            clang-18 lld-18 \
-            cmake ninja-build \
-            wget
+            wget \
+            unzip \
+            clang-18 \
+            lld-18 \
+            cmake \
+            ninja-build
 
-      # ── 4. libcxx cache ───────────────────────────────────────────────────────
-      #
-      # Building libcxx takes ~10-20 min the first time.
-      # We cache the built artefacts keyed on the SDK release tag so the cache
-      # is invalidated automatically whenever the SDK version changes.
-      - name: Get SDK release version (for cache key)
-        id: sdk-ver
-        run: |
-          VER=$(wget -qO- \
-            https://api.github.com/repos/ps5-payload-dev/pacbrew-repo/releases/latest \
-            | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-          echo "version=${VER}" >> "$GITHUB_OUTPUT"
-          echo "SDK version: $VER"
+          wget -q \
+            https://github.com/ps5-payload-dev/sdk/releases/latest/download/ps5-payload-sdk.zip \
+            -O /tmp/ps5-payload-sdk.zip
 
-      - name: Restore libcxx cache
-        id: cache-libcxx
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.PS5_PAYLOAD_SDK }}/lib/libc++.a
-            ${{ env.PS5_PAYLOAD_SDK }}/lib/libc++abi.a
-            ${{ env.PS5_PAYLOAD_SDK }}/include/c++
-          key: ps5-libcxx-${{ runner.os }}-${{ steps.sdk-ver.outputs.version }}
+          sudo unzip -q /tmp/ps5-payload-sdk.zip -d /opt
 
-      # ── 5. Build libcxx (cache miss only) ────────────────────────────────────
-      #
-      # libcxx.sh is part of the SDK *source* repo, not the binary distribution.
-      # We grab just the script via raw URL (no full clone needed).
-      # sudo -E preserves PS5_PAYLOAD_SDK so the script installs into the right
-      # place under /opt/ps5-payload-sdk.
-      - name: Build libcxx for PS5
-        if: steps.cache-libcxx.outputs.cache-hit != 'true'
+          echo "SDK contents:"
+          ls -la "$PS5_PAYLOAD_SDK"
+
+          echo "Checking Makefile.inc:"
+          test -f "$PS5_PAYLOAD_SDK/Makefile.inc"
+
+          echo "Makefile.inc found."
+
+      - name: Build libcxx
         run: |
           wget -q \
             https://raw.githubusercontent.com/ps5-payload-dev/sdk/master/libcxx.sh \
             -O /tmp/libcxx.sh
+
           chmod +x /tmp/libcxx.sh
-          sudo -E /tmp/libcxx.sh
-          echo "libcxx build complete."
-          ls -lh "$PS5_PAYLOAD_SDK/lib/libc++"* 2>/dev/null || true
 
-      # ── 6. Build ──────────────────────────────────────────────────────────────
-      - name: Build rtdump-il2cpp-ps5.elf
-        run: make -j$(nproc)
+          sudo -E \
+            PS5_PAYLOAD_SDK="$PS5_PAYLOAD_SDK" \
+            /tmp/libcxx.sh
 
-      # ── 7. Sanity check ───────────────────────────────────────────────────────
+      - name: Build rtdump-il2cpp-ps5
+        env:
+          PS5_PAYLOAD_SDK: /opt/ps5-payload-sdk
+        run: |
+          make -j$(nproc)
+
       - name: Verify ELF
         run: |
           file rtdump-il2cpp-ps5.elf
           ls -lh rtdump-il2cpp-ps5.elf
 
-      # ── 8. Upload artifact ────────────────────────────────────────────────────
-      #
-      # Available for download from the Actions run page for 30 days.
       - name: Upload ELF artifact
         uses: actions/upload-artifact@v4
         with:
@@ -115,13 +76,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      # ── 9. GitHub Release (tag push only) ────────────────────────────────────
-      #
-      # Push a semver tag to trigger:
-      #   git tag v1.0.0 && git push origin v1.0.0
-      #
-      # Tags containing a hyphen (v1.0.0-alpha, v1.0.0-rc1) are marked as
-      # pre-release automatically.
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
