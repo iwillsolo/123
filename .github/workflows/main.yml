@@ -40,10 +40,10 @@ jobs:
           echo "SDK contents:"
           ls -la "$PS5_PAYLOAD_SDK"
 
-          echo "Checking Makefile.inc:"
-          test -f "$PS5_PAYLOAD_SDK/Makefile.inc"
+          echo "Checking toolchain/prospero.mk:"
+          test -f "$PS5_PAYLOAD_SDK/toolchain/prospero.mk"
 
-          echo "Makefile.inc found."
+          echo "toolchain/prospero.mk found."
 
       - name: Build libcxx
         run: |
