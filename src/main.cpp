@@ -156,3 +156,12 @@ extern "C" void payload_main(void *args) {
 
     printf("[main] Both threads launched – payload returning.\n");
 }
+
+// ps5-payload-sdk's CRT (crt1.o) expects a standard 'main' entry point,
+// not 'payload_main'. Provide the thin wrapper it links against.
+int main(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    payload_main(nullptr);
+    return 0;
+}
